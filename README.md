@@ -1,242 +1,511 @@
-# GLiNER Fine-Tuning & Iran War NER
+# GLiNER2 NER for Knowledge Graph Construction
 
-This repository contains a fine-tuned GLiNER model workflow and an inference script for extracting named entities from the 2026 Iran War Wikipedia article.
+## Overview
 
-## Files
+This project fine-tunes **GLiNER2** to build the **Named Entity Recognition (NER) layer of a Knowledge Graph construction pipeline**.
 
-- `ner_iran_war.py` — downloads the Wikipedia article, extracts its sections, chunks long text, runs GLiNER NER, deduplicates predictions, and writes JSON/JSONL output.
-- `ner_iran_war.jsonl` — JSONL NER output.
-- `ner_iran_war.json` — JSON NER output when generated.
-- `requirements.txt` — Python dependencies.
+The goal is not to create a generic NER model. The goal is to reliably identify the entities that will become **nodes in a Knowledge Graph**, which can later be connected through relation extraction and stored in a graph database.
 
-## 1. Setup
+The final NER model is designed for seven entity types:
 
-Create and activate a virtual environment:
+- `PERSON`
+- `ORG`
+- `GPE`
+- `EVENT`
+- `DATE`
+- `TIME`
+- `QUANTITY`
 
-### Windows PowerShell
+These entities are particularly useful for extracting structured information from news, reports, articles, and other unstructured text before constructing the Knowledge Graph.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
+---
 
-Install dependencies:
+## Knowledge Graph Pipeline
 
-```powershell
-pip install -r requirements.txt
-```
-
-The script uses `requests`, `torch`, `beautifulsoup4`, and `gliner`.
-
-## 2. Fine-tuning GLiNER
-
-The fine-tuning process is performed using the GLiNER training workflow/Colab notebook.
-
-Prepare your training data using the labels required for your NER task. The labels used during training must be preserved because the inference script requires the same label names.
-
-After fine-tuning, keep the final inference model directory containing at least:
+The NER model represents the first major information-extraction stage of the Knowledge Graph pipeline.
 
 ```text
-pytorch_model.bin
-gliner_config.json
+Raw Documents
+     │
+     ▼
+Text Extraction / Preprocessing
+     │
+     ▼
+GLiNER2 NER
+     │
+     ├── PERSON
+     ├── ORG
+     ├── GPE
+     ├── EVENT
+     ├── DATE
+     ├── TIME
+     └── QUANTITY
+     │
+     ▼
+Entity Normalization / Deduplication
+     │
+     ▼
+Relation Extraction
+     │
+     ▼
+Knowledge Graph
+     │
+     ├── Entity Nodes
+     └── Relationship Edges
 ```
 
-The tokenizer/configuration files generated with the model should also be kept in the model directory.
+The purpose of this fine-tuning stage is therefore to produce **high-quality entity candidates for downstream Knowledge Graph construction**.
 
-Training checkpoints such as:
+---
 
-```text
-checkpoint-9000/
-checkpoint-10000/
-```
+## Entity Ontology
 
-are not required for inference and can be omitted when distributing the final model.
+| Entity | Description | Example |
+|---|---|---|
+| `PERSON` | Individual people | Donald Trump |
+| `ORG` | Organizations, companies, institutions, agencies, groups | NATO |
+| `GPE` | Geopolitical entities | Iran, India, Washington |
+| `EVENT` | Named events, conflicts, operations, disasters, incidents | Iran War |
+| `DATE` | Calendar dates and date expressions | August 14, 2026 |
+| `TIME` | Clock times and time-of-day expressions | 5 PM |
+| `QUANTITY` | Measured quantities, amounts, counts, or numeric quantities with units | 500 soldiers |
 
-## 3. Run NER inference
+---
 
-The script requires a local fine-tuned GLiNER model directory:
+# Training Data Strategy
 
-```powershell
-python ner_iran_war.py --model-dir "PATH_TO_FINETUNED_MODEL"
-```
+Two datasets are being combined because neither source provides all the entity types required for the Knowledge Graph.
 
-For example:
+### Dataset 1 — TNER OntoNotes5
 
-```powershell
-python ner_iran_war.py --model-dir ".\gliner_finetuned"
-```
-
-The script automatically:
-
-1. Selects CUDA when a CUDA-enabled PyTorch installation is available; otherwise it uses CPU.
-2. Downloads the configured Wikipedia article.
-3. Removes irrelevant HTML elements.
-4. Extracts meaningful article sections.
-5. Splits long sections into chunks.
-6. Runs the fine-tuned GLiNER model.
-7. Deduplicates entity predictions.
-8. Writes JSON and JSONL results.
-
-## 4. Specify entity labels
-
-The default labels in the script are:
+The TNER OntoNotes5 dataset is used as the trusted source for:
 
 ```text
 PERSON
-ORGANIZATION
-LOCATION
-EVENT
-WEAPON
+ORG
 DATE
+TIME
+QUANTITY
 ```
 
-The labels should match the labels used during fine-tuning.
+The notebook loads the dataset from Hugging Face and reads its `ClassLabel` metadata rather than assuming numeric tag IDs.
 
-You can explicitly provide the labels:
+The original BIO/BIOES-style annotations are converted into entity spans and only the required OntoNotes labels are retained.
 
-```powershell
-python ner_iran_war.py `
-  --model-dir ".\gliner_finetuned" `
-  --labels PERSON ORGANIZATION LOCATION EVENT WEAPON DATE
-```
+### Dataset 2 — `combined_output.jsonl`
 
-## 5. Adjust confidence threshold
-
-The default GLiNER confidence threshold is `0.50`.
-
-For example:
-
-```powershell
-python ner_iran_war.py `
-  --model-dir ".\gliner_finetuned" `
-  --threshold 0.60
-```
-
-Higher thresholds generally produce fewer, higher-confidence predictions.
-
-## 6. Adjust chunk size
-
-The default maximum chunk size is 180 words:
-
-```powershell
-python ner_iran_war.py `
-  --model-dir ".\gliner_finetuned" `
-  --max-words 180
-```
-
-You can change it, for example:
-
-```powershell
-python ner_iran_war.py `
-  --model-dir ".\gliner_finetuned" `
-  --max-words 150
-```
-
-## 7. Use another article URL
-
-The default URL is the 2026 Iran War Wikipedia article. A different compatible URL can be supplied:
-
-```powershell
-python ner_iran_war.py `
-  --model-dir ".\gliner_finetuned" `
-  --url "https://en.wikipedia.org/wiki/2026_Iran_war"
-```
-
-## 8. Specify output files
-
-Default outputs are:
+The second dataset is used as the trusted source for:
 
 ```text
-ner_iran_war.json
-ner_iran_war.jsonl
+GPE
+EVENT
 ```
 
-You can change them:
+Only these two labels are taken from Dataset 2.
 
-```powershell
-python ner_iran_war.py `
-  --model-dir ".\gliner_finetuned" `
-  --output "results.json" `
-  --jsonl-output "results.jsonl"
+---
+
+# Why We Do Not Simply Merge the Labels
+
+A major problem is that the two datasets have **different annotation coverage**.
+
+For example, Dataset 2 may contain:
+
+```text
+PERSON + ORG + GPE + EVENT
 ```
 
-## Complete example
+but we only trust its `GPE` and `EVENT` annotations.
 
-```powershell
-python ner_iran_war.py `
-  --model-dir ".\gliner_finetuned" `
-  --labels PERSON ORGANIZATION LOCATION EVENT WEAPON DATE `
-  --threshold 0.50 `
-  --max-words 180 `
-  --output "ner_iran_war.json" `
-  --jsonl-output "ner_iran_war.jsonl"
+If we simply remove the `PERSON` and `ORG` annotations and train the unified model, the model could incorrectly learn that those entities are **not entities** in Dataset 2.
+
+That would introduce false-negative supervision.
+
+Therefore, the project deliberately keeps the complete sentence while treating the missing labels as **unknown**, rather than explicitly treating them as negative examples.
+
+---
+
+# Two-Stage Specialist Training
+
+To reduce the annotation-coverage problem, the training process first creates two specialist GLiNER2 models.
+
+### Specialist 1 — OntoNotes Adapter
+
+Learns:
+
+```text
+PERSON
+ORG
+DATE
+TIME
+QUANTITY
 ```
 
-## Important notes
+### Specialist 2 — Dataset 2 Adapter
 
-### Label compatibility
+Learns:
 
-The script explicitly warns that the list of training labels cannot be reliably recovered from the GLiNER checkpoint. Therefore, `--labels` should contain the **exact labels used during fine-tuning**. The script currently provides domain-oriented defaults. 
+```text
+GPE
+EVENT
+```
 
-### Model directory
+Both specialists use **LoRA parameter-efficient fine-tuning**.
 
-`--model-dir` must point to the directory containing the final fine-tuned model. The script checks for `pytorch_model.bin` and then loads the model using:
+---
+
+# Pseudo-Labeling
+
+After training the specialist models, they can be used as teachers to recover entities that are missing from the other dataset.
+
+```text
+Dataset 1
+   │
+   └── OntoNotes trusted labels
+       PERSON
+       ORG
+       DATE
+       TIME
+       QUANTITY
+   │
+   └── Dataset 2 specialist predicts
+       GPE
+       EVENT
+
+
+Dataset 2
+   │
+   └── Dataset 2 trusted labels
+       GPE
+       EVENT
+   │
+   └── OntoNotes specialist predicts
+       PERSON
+       ORG
+       DATE
+       TIME
+       QUANTITY
+```
+
+Only predictions above the configured confidence threshold are accepted.
+
+The current notebook uses:
 
 ```python
-GLiNER.from_pretrained(model_path)
+PSEUDO_THRESHOLD = 0.85
 ```
 
-### GPU
+Pseudo-labeling is optional because these annotations are weak supervision and must be inspected before being used for final training.
 
-The script automatically uses:
+---
+
+# Final Unified Dataset
+
+The enriched datasets are combined into a single seven-label dataset.
+
+Before training:
+
+1. Source-specific annotations are normalized.
+2. Mixed sentences are preserved.
+3. Pseudo-labels can be added.
+4. Duplicate texts are merged.
+5. Duplicate entity annotations are removed.
+6. The final dataset is split into train, validation, and test sets.
+
+The split occurs **after deduplication** so that the same text does not unintentionally appear across different splits.
+
+---
+
+# Final GLiNER2 Model
+
+The final model is based on:
 
 ```text
-cuda
+fastino/gliner2-base-v1
 ```
 
-when `torch.cuda.is_available()` is true. Otherwise it runs on:
+and is fine-tuned with the unified seven-label ontology:
 
 ```text
-cpu
+PERSON
+ORG
+GPE
+EVENT
+DATE
+TIME
+QUANTITY
 ```
 
-## CLI reference
+The current notebook starts with:
 
 ```text
---model-dir       Required. Path to the fine-tuned GLiNER model.
---labels          Entity labels used during fine-tuning.
---threshold       Confidence threshold. Default: 0.50.
---max-words       Maximum words per NER chunk. Default: 180.
---url             Wikipedia article URL.
---output          JSON output path. Default: ner_iran_war.json.
---jsonl-output    JSONL output path. Default: ner_iran_war.jsonl.
+Epochs: 3
+Batch size: 8
+Gradient accumulation: 2
+Encoder learning rate: 1e-5
+Task learning rate: 5e-4
+LoRA: enabled
 ```
 
-## Output format
+Early stopping and validation are enabled for the final training stage.
 
-The JSONL output contains one record per extracted entity with fields such as:
+---
+
+# Why These Entities Matter for the Knowledge Graph
+
+The extracted entities will eventually become **Knowledge Graph nodes**.
+
+For example, from:
+
+```text
+President Donald Trump met NATO officials in Washington
+on August 14, 2026 during the Iran conflict.
+```
+
+the NER system can identify:
+
+```text
+PERSON    → Donald Trump
+ORG       → NATO
+GPE       → Washington
+DATE      → August 14, 2026
+EVENT     → Iran conflict
+```
+
+These entities can then be passed to the downstream relation-extraction system.
+
+Conceptually:
+
+```text
+Donald Trump
+      │
+      │ met
+      ▼
+    NATO
+      │
+      │ located/operating in
+      ▼
+ Washington
+
+Iran conflict
+      │
+      │ occurred during
+      ▼
+August 14, 2026
+```
+
+NER therefore provides the **entity layer**, while the subsequent relation-extraction stage provides the **relationship layer**.
+
+Together they form the basis of the Knowledge Graph.
+
+---
+
+# Data Format
+
+The cleaned data is converted into the GLiNER2 training format:
 
 ```json
 {
-  "section": "Introduction",
-  "section_index": 0,
-  "chunk_index": 0,
-  "entity": "Example Entity",
-  "label": "ORGANIZATION",
-  "score": 0.91,
-  "start": 10,
-  "end": 24
+  "input": "Donald Trump met NATO officials in Washington.",
+  "output": {
+    "entities": {
+      "PERSON": ["Donald Trump"],
+      "ORG": ["NATO"],
+      "GPE": ["Washington"]
+    }
+  }
 }
 ```
 
-The JSON output additionally stores metadata including the source URL, model directory, device, threshold, entity types, article size, chunk count, and total entity count.
+The notebook generates:
 
-## Reproducibility
+```text
+gliner2_ner/
+├── ontonotes_trusted.jsonl
+├── dataset2_trusted.jsonl
+├── train.jsonl
+├── validation.jsonl
+├── test.jsonl
+├── adapters/
+│   ├── ontonotes/
+│   └── dataset2/
+└── final_model/
+```
 
-For reproducible inference:
+---
 
-- Use the same fine-tuned model files.
-- Use the exact entity labels used during training.
-- Keep the confidence threshold fixed.
-- Keep the chunk size fixed.
-- Record the GLiNER and PyTorch versions used for deployment.
+# Training Workflow
+
+The complete workflow is:
+
+```text
+1. Load OntoNotes5
+        │
+        ▼
+2. Extract trusted PERSON/ORG/DATE/TIME/QUANTITY
+        │
+        ▼
+3. Load combined_output.jsonl
+        │
+        ▼
+4. Extract trusted GPE/EVENT
+        │
+        ▼
+5. Preserve mixed sentences
+        │
+        ▼
+6. Train OntoNotes specialist
+        │
+        ▼
+7. Train Dataset 2 specialist
+        │
+        ▼
+8. Optional high-confidence pseudo-labeling
+        │
+        ▼
+9. Inspect pseudo-labels
+        │
+        ▼
+10. Merge + deduplicate
+        │
+        ▼
+11. Train/validation/test split
+        │
+        ▼
+12. Validate training data
+        │
+        ▼
+13. Fine-tune final GLiNER2
+        │
+        ▼
+14. Evaluate NER
+        │
+        ▼
+15. Use extracted entities for Knowledge Graph construction
+```
+
+---
+
+# Evaluation
+
+The notebook includes an exact-match evaluation based on:
+
+```text
+(entity text, entity label)
+```
+
+and calculates:
+
+```text
+Precision
+Recall
+F1
+TP
+FP
+FN
+```
+
+The test set should ultimately be **manually verified** because the two source datasets have different annotation policies.
+
+Evaluation should also be performed **per entity type**, not only using aggregate F1.
+
+In particular:
+
+```text
+TIME
+EVENT
+QUANTITY
+```
+
+should be evaluated independently because weak performance on minority entity types can be hidden by the aggregate score. 
+---
+
+# Running the Notebook
+
+The notebook is designed to run in **Google Colab**.
+
+Install dependencies:
+
+```bash
+pip install -U "gliner2[local]" datasets scikit-learn pandas matplotlib tqdm
+```
+
+Upload:
+
+```text
+combined_output.jsonl
+```
+
+and configure:
+
+```python
+DATASET2_PATH = Path("/content/combined_output.jsonl")
+```
+
+Then execute the notebook from preprocessing through final training.
+
+---
+
+# Important Training Principle
+
+This project prioritizes **annotation correctness over simply maximizing dataset size**.
+
+We do not assume:
+
+```text
+"entity not annotated"
+=
+"not an entity"
+```
+
+Instead, we distinguish between:
+
+```text
+Trusted positive annotation
+        vs.
+Missing annotation
+```
+
+This distinction is important when combining datasets with different annotation policies and is particularly important for Knowledge Graph construction, where incorrect entities can propagate into later node creation and relationship extraction.
+
+---
+
+# End Goal
+
+The ultimate objective is to use the fine-tuned GLiNER2 model as the **entity extraction component of a Knowledge Graph pipeline**.
+
+The final architecture is intended to evolve into:
+
+```text
+                 Documents / News / Reports
+                           │
+                           ▼
+                    Text Processing
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │   GLiNER2   │
+                    │     NER     │
+                    └──────┬──────┘
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+        Entity Nodes              Entity Metadata
+              │
+              ▼
+       Entity Resolution
+              │
+              ▼
+      Relation Extraction
+              │
+              ▼
+        Graph Construction
+              │
+              ▼
+        ┌───────────────┐
+        │ Knowledge     │
+        │    Graph      │
+        └───────────────┘
+```
+
+The trained GLiNER2 model is therefore **not the final product**. It is the NER foundation used to identify the entities that will populate the Knowledge Graph and support downstream relation extraction, entity resolution, and graph construction.
