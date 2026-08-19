@@ -1,22 +1,24 @@
 # GLiNER2 NER for Knowledge Graph Construction
 
+[![Hugging Face Model](https://img.shields.io/badge/🤗%20Model-Saurabh18888/gliner--news--geo-yellow.svg)](https://huggingface.co/Saurabh18888/gliner-news-geo)
+
 ## Overview
 
 This project fine-tunes **GLiNER2** to build the **Named Entity Recognition (NER) layer of a Knowledge Graph construction pipeline**.
 
 The goal is not to create a generic NER model. The goal is to reliably identify the entities that will become **nodes in a Knowledge Graph**, which can later be connected through relation extraction and stored in a graph database.
 
-The final NER model is designed for seven entity types:
+The final NER model is designed for five core geopolitical entity types:
 
 - `PERSON`
 - `ORG`
 - `GPE`
 - `EVENT`
 - `DATE`
-- `TIME`
-- `QUANTITY`
 
 These entities are particularly useful for extracting structured information from news, reports, articles, and other unstructured text before constructing the Knowledge Graph.
+
+You can access the fine-tuned model here: **[Saurabh18888/gliner-news-geo](https://huggingface.co/Saurabh18888/gliner-news-geo)**
 
 ---
 
@@ -37,9 +39,7 @@ GLiNER2 NER
      ├── ORG
      ├── GPE
      ├── EVENT
-     ├── DATE
-     ├── TIME
-     └── QUANTITY
+     └── DATE
      │
      ▼
 Entity Normalization / Deduplication
@@ -54,7 +54,7 @@ Knowledge Graph
      └── Relationship Edges
 ```
 
-The purpose of this fine-tuning stage is therefore to produce **high-quality entity candidates for downstream Knowledge Graph construction**.
+The purpose of this fine-tuning stage is to produce **high-quality entity candidates for downstream Knowledge Graph construction**.
 
 ---
 
@@ -62,208 +62,83 @@ The purpose of this fine-tuning stage is therefore to produce **high-quality ent
 
 | Entity | Description | Example |
 |---|---|---|
-| `PERSON` | Individual people | Donald Trump |
-| `ORG` | Organizations, companies, institutions, agencies, groups | NATO |
-| `GPE` | Geopolitical entities | Iran, India, Washington |
-| `EVENT` | Named events, conflicts, operations, disasters, incidents | Iran War |
-| `DATE` | Calendar dates and date expressions | August 14, 2026 |
-| `TIME` | Clock times and time-of-day expressions | 5 PM |
-| `QUANTITY` | Measured quantities, amounts, counts, or numeric quantities with units | 500 soldiers |
+| `PERSON` | Names of individual people including politicians, business leaders, and officials. | Donald Trump |
+| `ORG` | Organizations, companies, governments, political parties, NGOs, and institutions. | NATO |
+| `GPE` | Geopolitical entities such as countries, states, provinces, cities, and territories. | Iran, Washington |
+| `EVENT` | Named or identifiable real-world events including geopolitical, military, and historical events. | 2024 Paris Olympics |
+| `DATE` | Temporal expressions including dates, months, years, date ranges, and relative dates. | August 14, 2026 |
 
 ---
 
-# Training Data Strategy
+## Training Data Strategy
 
-Two datasets are being combined because neither source provides all the entity types required for the Knowledge Graph.
+Because no single dataset provides high-quality coverage for all five target labels, this pipeline merges **three distinct datasets**:
 
-### Dataset 1 — TNER OntoNotes5
+### 1. [TNER OntoNotes 5](https://huggingface.co/datasets/tner/ontonotes5)
+The foundational dataset. It provides excellent, high-volume coverage for `PERSON`, `ORG`, `GPE`, and `DATE`. It contains very few `EVENT`s.
 
-The TNER OntoNotes5 dataset is used as the trusted source for:
+### 2. [Few-NERD](https://huggingface.co/datasets/DFKI-SLT/few-nerd)
+Used strictly to bolster the `EVENT` class. Few-NERD provides a massive pool of events, which we filter and randomly downsample to balance against the OntoNotes labels.
 
-```text
-PERSON
-ORG
-DATE
-TIME
-QUANTITY
-```
-
-The notebook loads the dataset from Hugging Face and reads its `ClassLabel` metadata rather than assuming numeric tag IDs.
-
-The original BIO/BIOES-style annotations are converted into entity spans and only the required OntoNotes labels are retained.
-
-### Dataset 2 — `combined_output.jsonl`
-
-The second dataset is used as the trusted source for:
-
-```text
-GPE
-EVENT
-```
-
-Only these two labels are taken from Dataset 2.
+### 3. Custom JSONL (`combined_output.jsonl`)
+A highly-trusted, domain-specific local dataset focused entirely on geopolitical `EVENT`s. We drop corrupted labels from this dataset (like broken PERSON/ORG extractions) and keep only the gold-standard EVENTs to inject strong domain knowledge into the model.
 
 ---
 
-# Why We Do Not Simply Merge the Labels
+## Overcoming the Annotation Coverage Problem
 
-A major problem is that the two datasets have **different annotation coverage**.
+A major problem when merging datasets is **differing annotation coverage**. 
 
-For example, Dataset 2 may contain:
+For example, our Custom JSONL dataset drops `PERSON` and `ORG` labels because they were corrupted. If we feed a sentence containing a person's name to the model but don't label it as `PERSON`, the model learns a **False Negative** (i.e., it learns that the name is *not* a person).
 
-```text
-PERSON + ORG + GPE + EVENT
-```
+Instead of using complex multi-stage pseudo-labeling, we solve this gracefully using **GLiNER's dynamic prompting format**. 
 
-but we only trust its `GPE` and `EVENT` annotations.
+During dataset construction, we restrict the prompted `valid_labels` based on the source dataset:
+* For **OntoNotes**, we prompt the model to learn all 5 labels.
+* For **Custom JSONL**, we *only* prompt the model for `EVENT`. 
 
-If we simply remove the `PERSON` and `ORG` annotations and train the unified model, the model could incorrectly learn that those entities are **not entities** in Dataset 2.
-
-That would introduce false-negative supervision.
-
-Therefore, the project deliberately keeps the complete sentence while treating the missing labels as **unknown**, rather than explicitly treating them as negative examples.
+By not asking the model to predict `PERSON` or `ORG` on the Custom dataset, we completely bypass the False Negative penalty.
 
 ---
 
-# Two-Stage Specialist Training
+## Dataset Balancing & Unified Training
 
-To reduce the annotation-coverage problem, the training process first creates two specialist GLiNER2 models.
+Because Few-NERD contains over 100,000 events, simply concatenating the datasets would cause the `EVENT` class to dominate the loss function, destroying the model's ability to recognize dates or organizations.
 
-### Specialist 1 — OntoNotes Adapter
-
-Learns:
-
-```text
-PERSON
-ORG
-DATE
-TIME
-QUANTITY
-```
-
-### Specialist 2 — Dataset 2 Adapter
-
-Learns:
-
-```text
-GPE
-EVENT
-```
-
-Both specialists use **LoRA parameter-efficient fine-tuning**.
+The pipeline implements a **controlled budgeting strategy**:
+1. It calculates the fixed number of entities provided by OntoNotes and Custom datasets.
+2. It sets a dynamic `TARGET_BUDGET` (e.g., 18,000 entities per class).
+3. It samples just enough Few-NERD records to reach the budget.
 
 ---
 
-# Pseudo-Labeling
+## Final GLiNER2 Model
 
-After training the specialist models, they can be used as teachers to recover entities that are missing from the other dataset.
-
-```text
-Dataset 1
-   │
-   └── OntoNotes trusted labels
-       PERSON
-       ORG
-       DATE
-       TIME
-       QUANTITY
-   │
-   └── Dataset 2 specialist predicts
-       GPE
-       EVENT
-
-
-Dataset 2
-   │
-   └── Dataset 2 trusted labels
-       GPE
-       EVENT
-   │
-   └── OntoNotes specialist predicts
-       PERSON
-       ORG
-       DATE
-       TIME
-       QUANTITY
-```
-
-Only predictions above the configured confidence threshold are accepted.
-
-The current notebook uses:
-
-```python
-PSEUDO_THRESHOLD = 0.85
-```
-
-Pseudo-labeling is optional because these annotations are weak supervision and must be inspected before being used for final training.
-
----
-
-# Final Unified Dataset
-
-The enriched datasets are combined into a single seven-label dataset.
-
-Before training:
-
-1. Source-specific annotations are normalized.
-2. Mixed sentences are preserved.
-3. Pseudo-labels can be added.
-4. Duplicate texts are merged.
-5. Duplicate entity annotations are removed.
-6. The final dataset is split into train, validation, and test sets.
-
-The split occurs **after deduplication** so that the same text does not unintentionally appear across different splits.
-
----
-
-# Final GLiNER2 Model
-
-The final model is based on:
+The final model uses **LoRA parameter-efficient fine-tuning** on top of the base GLiNER architecture:
 
 ```text
-fastino/gliner2-base-v1
-```
-
-and is fine-tuned with the unified seven-label ontology:
-
-```text
-PERSON
-ORG
-GPE
-EVENT
-DATE
-TIME
-QUANTITY
-```
-
-The current notebook starts with:
-
-```text
-Epochs: 3
-Batch size: 8
+Base Model: fastino/gliner2-base-v1
+Epochs: 8
+Batch size: 18
 Gradient accumulation: 2
 Encoder learning rate: 1e-5
 Task learning rate: 5e-4
-LoRA: enabled
+LoRA Rank (r): 8 (Configurable to 16/32)
+LoRA Alpha: 16.0 (Configurable to 32.0/64.0)
 ```
 
-Early stopping and validation are enabled for the final training stage.
+Early stopping (`patience=3`) and validation are evaluated at every epoch.
 
 ---
 
-# Why These Entities Matter for the Knowledge Graph
+## Why These Entities Matter for the Knowledge Graph
 
 The extracted entities will eventually become **Knowledge Graph nodes**.
 
 For example, from:
+> *President Donald Trump met NATO officials in Washington on August 14, 2026 during the Iran conflict.*
 
-```text
-President Donald Trump met NATO officials in Washington
-on August 14, 2026 during the Iran conflict.
-```
-
-the NER system can identify:
-
+The NER system extracts:
 ```text
 PERSON    → Donald Trump
 ORG       → NATO
@@ -272,240 +147,85 @@ DATE      → August 14, 2026
 EVENT     → Iran conflict
 ```
 
-These entities can then be passed to the downstream relation-extraction system.
-
-Conceptually:
+These entities can then be passed to the downstream relation-extraction system to form the basis of the Knowledge Graph:
 
 ```text
-Donald Trump
-      │
-      │ met
-      ▼
-    NATO
-      │
-      │ located/operating in
-      ▼
- Washington
-
-Iran conflict
-      │
-      │ occurred during
-      ▼
-August 14, 2026
-```
-
-NER therefore provides the **entity layer**, while the subsequent relation-extraction stage provides the **relationship layer**.
-
-Together they form the basis of the Knowledge Graph.
-
----
-
-# Data Format
-
-The cleaned data is converted into the GLiNER2 training format:
-
-```json
-{
-  "input": "Donald Trump met NATO officials in Washington.",
-  "output": {
-    "entities": {
-      "PERSON": ["Donald Trump"],
-      "ORG": ["NATO"],
-      "GPE": ["Washington"]
-    }
-  }
-}
-```
-
-The notebook generates:
-
-```text
-gliner2_ner/
-├── ontonotes_trusted.jsonl
-├── dataset2_trusted.jsonl
-├── train.jsonl
-├── validation.jsonl
-├── test.jsonl
-├── adapters/
-│   ├── ontonotes/
-│   └── dataset2/
-└── final_model/
+[Donald Trump] ──(met)──▶ [NATO] ──(located in)──▶ [Washington]
+                               │
+                       (occurred during)
+                               │
+                               ▼
+                       [Iran conflict]
 ```
 
 ---
 
-# Training Workflow
+## Training Workflow
 
-The complete workflow is:
+The complete notebook workflow is:
 
 ```text
-1. Load OntoNotes5
+1. Load OntoNotes 5, Few-NERD, and Custom JSONL
         │
         ▼
-2. Extract trusted PERSON/ORG/DATE/TIME/QUANTITY
+2. Normalize all formats to Character-Level Spans
         │
         ▼
-3. Load combined_output.jsonl
+3. Validate and drop overlapping/whitespace spans
         │
         ▼
-4. Extract trusted GPE/EVENT
+4. Global text deduplication (preventing data leakage)
         │
         ▼
-5. Preserve mixed sentences
+5. Class Balancing (Downsample Few-NERD to Target Budget)
         │
         ▼
-6. Train OntoNotes specialist
+6. GroupShuffleSplit (Train / Val / Test)
         │
         ▼
-7. Train Dataset 2 specialist
+7. Convert to GLiNER2 InputExample format
         │
         ▼
-8. Optional high-confidence pseudo-labeling
+8. Fine-tune unified GLiNER2 with LoRA
         │
         ▼
-9. Inspect pseudo-labels
+9. Strict Span + Label Evaluation & Error Analysis
         │
         ▼
-10. Merge + deduplicate
-        │
-        ▼
-11. Train/validation/test split
-        │
-        ▼
-12. Validate training data
-        │
-        ▼
-13. Fine-tune final GLiNER2
-        │
-        ▼
-14. Evaluate NER
-        │
-        ▼
-15. Use extracted entities for Knowledge Graph construction
+10. Save Model & Adapters
 ```
 
 ---
 
-# Evaluation
+## Evaluation
 
-The notebook includes an exact-match evaluation based on:
-
-```text
-(entity text, entity label)
-```
-
-and calculates:
+The notebook includes an exact-match evaluation based on strict span boundaries:
 
 ```text
-Precision
-Recall
-F1
-TP
-FP
-FN
+(entity start, entity end, entity label)
 ```
 
-The test set should ultimately be **manually verified** because the two source datasets have different annotation policies.
+It outputs Micro/Macro statistics including Precision, Recall, and F1. 
 
-Evaluation should also be performed **per entity type**, not only using aggregate F1.
+A dedicated **Error Analysis** module is included to randomly sample and review:
+* `Missed Entities` (False Negatives)
+* `Spurious Entities` (False Positives)
+* `Wrong Labels`
 
-In particular:
-
-```text
-TIME
-EVENT
-QUANTITY
-```
-
-should be evaluated independently because weak performance on minority entity types can be hidden by the aggregate score. 
 ---
 
-# Running the Notebook
+## Running the Notebook
 
 The notebook is designed to run in **Google Colab**.
 
 Install dependencies:
-
 ```bash
-pip install -U "gliner2[local]" datasets scikit-learn pandas matplotlib tqdm
+pip install -q "gliner2[local]" datasets scikit-learn matplotlib seaborn pandas tqdm huggingface_hub
 ```
 
-Upload:
-
+Upload the domain-specific data:
 ```text
 combined_output.jsonl
 ```
 
-and configure:
-
-```python
-DATASET2_PATH = Path("/content/combined_output.jsonl")
-```
-
-Then execute the notebook from preprocessing through final training.
-
----
-
-# Important Training Principle
-
-This project prioritizes **annotation correctness over simply maximizing dataset size**.
-
-We do not assume:
-
-```text
-"entity not annotated"
-=
-"not an entity"
-```
-
-Instead, we distinguish between:
-
-```text
-Trusted positive annotation
-        vs.
-Missing annotation
-```
-
-This distinction is important when combining datasets with different annotation policies and is particularly important for Knowledge Graph construction, where incorrect entities can propagate into later node creation and relationship extraction.
-
----
-
-# End Goal
-
-The ultimate objective is to use the fine-tuned GLiNER2 model as the **entity extraction component of a Knowledge Graph pipeline**.
-
-The final architecture is intended to evolve into:
-
-```text
-                 Documents / News / Reports
-                           │
-                           ▼
-                    Text Processing
-                           │
-                           ▼
-                    ┌─────────────┐
-                    │   GLiNER2   │
-                    │     NER     │
-                    └──────┬──────┘
-                           │
-              ┌────────────┴────────────┐
-              ▼                         ▼
-        Entity Nodes              Entity Metadata
-              │
-              ▼
-       Entity Resolution
-              │
-              ▼
-      Relation Extraction
-              │
-              ▼
-        Graph Construction
-              │
-              ▼
-        ┌───────────────┐
-        │ Knowledge     │
-        │    Graph      │
-        └───────────────┘
-```
-
-The trained GLiNER2 model is therefore **not the final product**. It is the NER foundation used to identify the entities that will populate the Knowledge Graph and support downstream relation extraction, entity resolution, and graph construction.
+Run the notebook sequentially to preprocess the multi-source data, train the LoRA adapter, and save the merged `/best_model` locally or push it directly to the Hugging Face hub.
