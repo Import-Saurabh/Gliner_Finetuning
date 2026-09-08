@@ -1,4 +1,5 @@
 gliner
+gliner2
 torch
 transformers
 huggingface-hub
