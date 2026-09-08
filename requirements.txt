@@ -3,3 +3,9 @@ gliner2
 torch
 transformers
 huggingface-hub
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+python-dotenv
+httpx
