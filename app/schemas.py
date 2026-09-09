@@ -14,7 +14,7 @@ class EntitySpan(BaseModel):
 
 
 class NERRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=4000,
+    text: str = Field(..., min_length=1, max_length=10000,
                       description="News / Wikipedia text to analyse")
     labels: Optional[List[str]] = Field(
         default=None,

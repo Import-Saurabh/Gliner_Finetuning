@@ -36,7 +36,9 @@ h1{font-size:44px;font-weight:600;text-align:center;letter-spacing:.3px}
 .field.nomargin{margin-bottom:0}
 label{display:block;font-size:14px;font-weight:500;margin-bottom:8px;color:#efe8e0}
 select,textarea,input{width:100%;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.16);border-radius:10px;padding:13px 15px;color:var(--ink);font:400 14px/1.55 Inter,sans-serif;outline:none;transition:border-color .2s,box-shadow .2s}
-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23f97316' stroke-width='2' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;cursor:pointer}
+select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23f97316' stroke-width='2' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;cursor:pointer;background-color:#1a120c;color:var(--ink)}
+select option{background:#1a120c;color:var(--ink)}
+select option:checked{background:#f97316;color:#fff}
 textarea{resize:vertical;min-height:340px;height:100%}
 select:focus,textarea:focus,input:focus{border-color:var(--orange);box-shadow:0 0 0 3px rgba(249,115,22,.16)}
 ::placeholder{color:#6d665e}
@@ -209,8 +211,19 @@ footer a:hover{text-decoration:underline}
 const COLORS={PERSON:"#ff8c42",GPE:"#ffd166",ORG:"#e76f51",EVENT:"#f2e2c4",DATE:"#b08968"};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-async function api(p,o){const r=await fetch(p,o);if(!r.ok){let d={};try{d=await r.json()}catch(e){}
-  const err=new Error(d.detail||("HTTP "+r.status));err.status=r.status;throw err;}return r.json();}
+async function api(p,o){
+  const r=await fetch(p,o);
+  if(!r.ok){
+    let d={};
+    try{d=await r.json()}catch(e){}
+    let msg = d.detail || ("HTTP "+r.status);
+    if(Array.isArray(msg)) msg = msg.map(x=>x.msg||JSON.stringify(x)).join("; ");
+    const err=new Error(msg);
+    err.status=r.status;
+    throw err;
+  }
+  return r.json();
+}
 function showStatus(m,cls){const el=$("#status");el.textContent=m;el.className="status "+cls;el.hidden=false;}
 function hideStatus(){$("#status").hidden=true;}
 
