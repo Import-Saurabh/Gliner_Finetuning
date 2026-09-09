@@ -19,6 +19,7 @@ from typing import Dict, List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from mangum import Mangum  # <-- ADDED: Required for AWS Lambda
 
 from .model import DATASET_NAME, ModelManager, settings
 from .samples import SAMPLES
@@ -42,8 +43,10 @@ AUTHOR_GITHUB = "https://github.com/Import-Saurabh"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    threading.Thread(target=manager.load, name="model-warmup", daemon=True).start()
-    log.info("Background model warm-up started")
+    # For AWS Lambda, we shouldn't use background threads for initialization 
+    # because the runtime freezes them. We will load synchronously on cold start instead.
+    # manager.load() # optionally load synchronously here, or let the first request do it.
+    log.info("GeoNER API startup (model will load on first request)")
     yield
     log.info("GeoNER API shutting down")
 
@@ -175,3 +178,7 @@ def ner(req: NERRequest):
             "dataset": DATASET_NAME,
         },
     )
+
+# -------------------------------------------------------------------- LAMBDA HANDLER
+# This wraps the FastAPI app so AWS Lambda can invoke it
+handler = Mangum(app)
