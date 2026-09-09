@@ -1,11 +1,14 @@
 gliner
 gliner2
-torch
 transformers
-huggingface-hub
+huggingface-hub<1.0
 fastapi
 uvicorn[standard]
 pydantic
 python-multipart
 python-dotenv
 httpx
+numpy==1.26.4
+mangum
+peft
+sentencepiece==0.2.0
