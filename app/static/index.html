@@ -113,9 +113,9 @@ footer a:hover{text-decoration:underline}
     <span>GeoNER</span>
   </div>
   <nav class="pill">
-    <a href="#demo">Demo</a><a href="#sample">Samples</a><a href="#wiki">Wikipedia</a><a href="#labels">Labels</a><a href="/docs" target="_blank">API Docs</a><a href="#credit">Creator</a>
+    <a href="#demo">Demo</a><a href="#sample">Samples</a><a href="#wiki">Wikipedia</a><a href="#labels">Labels</a><a href="https://guz8o5bmkl.execute-api.ap-south-1.amazonaws.com/docs" target="_blank">API Docs</a><a href="#credit">Creator</a>
   </nav>
-  <a class="cta" href="/docs" target="_blank">Get Started</a>
+  <a class="cta" href="https://guz8o5bmkl.execute-api.ap-south-1.amazonaws.com/docs" target="_blank">Get Started</a>
 </header>
 
 <main>
@@ -212,7 +212,8 @@ const COLORS={PERSON:"#ff8c42",GPE:"#ffd166",ORG:"#e76f51",EVENT:"#f2e2c4",DATE:
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 async function api(p,o){
-  const r=await fetch(p,o);
+  const baseUrl = "https://guz8o5bmkl.execute-api.ap-south-1.amazonaws.com";
+  const r=await fetch(baseUrl + p,o);
   if(!r.ok){
     let d={};
     try{d=await r.json()}catch(e){}
