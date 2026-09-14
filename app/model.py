@@ -5,7 +5,9 @@ Adapter    : LoRA/adapter finetuned on the GEOPOLITICAL WIKI NEWS DATASET
              (Wikipedia current-conflict / wiki-news style articles).
 Labels     : PERSON, GPE, ORG, EVENT, DATE
 """
+
 from __future__ import annotations
+
 import gliner2
 import logging
 import os
@@ -14,24 +16,45 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 import mangum
+
+
 # ---------------------------------------------------------------------------
 # AWS Lambda filesystem is read-only except for /tmp.
-# Force Hugging Face/model caches to use the writable Lambda /tmp directory.
+# Force ALL Hugging Face / Transformers / cache locations to /tmp.
 # ---------------------------------------------------------------------------
-os.environ.setdefault("HF_HOME", "/tmp/huggingface")
-os.environ.setdefault("HF_HUB_CACHE", "/tmp/huggingface/hub")
-os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/huggingface/transformers")
+
+os.environ["HOME"] = "/tmp"
+os.environ["HF_HOME"] = "/tmp/huggingface"
+os.environ["HF_HUB_CACHE"] = "/tmp/huggingface/hub"
+os.environ["TRANSFORMERS_CACHE"] = "/tmp/huggingface/transformers"
+os.environ["HUGGINGFACE_HUB_CACHE"] = "/tmp/huggingface/hub"
+os.environ["XDG_CACHE_HOME"] = "/tmp/cache"
+
 
 log = logging.getLogger("geoner.model")
 
-DATASET_NAME = "Geopolitical Wiki News Dataset (Wikipedia current-conflict articles)"
 
-# Default adapter location: <this file's dir>/adapter/best (i.e. app/adapter/best),
-# resolved relative to model.py itself so it works no matter which directory
-# `uvicorn` was launched from. ADAPTER_PATH env var still overrides this
-# (either with a different local path, or a Hugging Face Hub repo id).
-_DEFAULT_ADAPTER_DIR = str(Path(__file__).resolve().parent / "adapter" / "best")
+DATASET_NAME = (
+    "Geopolitical Wiki News Dataset "
+    "(Wikipedia current-conflict articles)"
+)
+
+
+# Default adapter location:
+# <this file's dir>/adapter/best
+# i.e. app/adapter/best
+#
+# It is resolved relative to model.py itself so it works regardless
+# of the directory from which uvicorn/Lambda is launched.
+#
+# ADAPTER_PATH can still override this with:
+# - a different local directory
+# - a Hugging Face Hub repository ID
+_DEFAULT_ADAPTER_DIR = str(
+    Path(__file__).resolve().parent / "adapter" / "best"
+)
 
 
 @dataclass
@@ -72,9 +95,10 @@ settings = Settings()
 class ModelManager:
     """Loads the GLiNER2 base model + finetuned adapter exactly once.
 
-    - Background warm-up at startup.
+    - Thread-safe loading.
     - Self-healing: a failed load is retried on the next request.
-    - Adapter can be a local dir (repo/adapter/best) or a HF Hub repo id.
+    - Adapter can be a local directory (app/adapter/best)
+      or a Hugging Face Hub repository ID.
     """
 
     def __init__(self, cfg: Settings):
@@ -85,13 +109,14 @@ class ModelManager:
         self._error: Optional[str] = None
 
     # ------------------------------------------------------------------ load
+
     def load(self) -> bool:
         with self._lock:
             if self._model is not None:
                 return True
 
             if self._loading:
-                return False  # warm-up already in progress -> 503
+                return False
 
             self._loading = True
             self._error = None
@@ -99,7 +124,10 @@ class ModelManager:
         try:
             from gliner2 import GLiNER2
 
-            log.info("Loading base model: %s", self.cfg.base_model)
+            log.info(
+                "Loading base model: %s",
+                self.cfg.base_model,
+            )
 
             model = GLiNER2.from_pretrained(
                 self.cfg.base_model
@@ -109,7 +137,10 @@ class ModelManager:
                 self.cfg.adapter_path
             )
 
-            log.info("Loading adapter from: %s", adapter)
+            log.info(
+                "Loading adapter from: %s",
+                adapter,
+            )
 
             model.load_adapter(adapter)
 
@@ -121,7 +152,7 @@ class ModelManager:
 
             return True
 
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             log.exception("Model load failed")
 
             with self._lock:
@@ -138,7 +169,7 @@ class ModelManager:
         if p.is_dir():
             return str(p)
 
-        # Treat as Hugging Face repo id.
+        # Otherwise treat it as a Hugging Face repository ID.
         from huggingface_hub import snapshot_download
 
         return snapshot_download(
@@ -147,6 +178,7 @@ class ModelManager:
         )
 
     # ----------------------------------------------------------------- state
+
     @property
     def loaded(self) -> bool:
         return self._model is not None
@@ -156,6 +188,7 @@ class ModelManager:
         return self._error
 
     # -------------------------------------------------------------- inference
+
     def extract(
         self,
         text: str,
@@ -183,20 +216,22 @@ class ModelManager:
                     s = int(e["start"])
                     en = int(e["end"])
 
-                    spans.append({
-                        "text": (
-                            e.get("span")
-                            or e.get("text")
-                            or text[s:en]
-                        ),
-                        "label": e["label"],
-                        "start": s,
-                        "end": en,
-                        "score": round(
-                            float(e.get("score", 1.0)),
-                            4,
-                        ),
-                    })
+                    spans.append(
+                        {
+                            "text": (
+                                e.get("span")
+                                or e.get("text")
+                                or text[s:en]
+                            ),
+                            "label": e["label"],
+                            "start": s,
+                            "end": en,
+                            "score": round(
+                                float(e.get("score", 1.0)),
+                                4,
+                            ),
+                        }
+                    )
 
                 except Exception:
                     continue
@@ -228,13 +263,15 @@ class ModelManager:
                                 (m.start(), m.end())
                             )
 
-                            spans.append({
-                                "text": item,
-                                "label": label,
-                                "start": m.start(),
-                                "end": m.end(),
-                                "score": 1.0,
-                            })
+                            spans.append(
+                                {
+                                    "text": item,
+                                    "label": label,
+                                    "start": m.start(),
+                                    "end": m.end(),
+                                    "score": 1.0,
+                                }
+                            )
 
                             break
 
