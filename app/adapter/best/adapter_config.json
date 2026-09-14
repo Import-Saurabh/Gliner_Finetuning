@@ -34,10 +34,10 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "value_proj",
     "key_proj",
     "dense",
-    "query_proj"
+    "query_proj",
+    "value_proj"
   ],
   "target_parameters": null,
   "task_type": null,
