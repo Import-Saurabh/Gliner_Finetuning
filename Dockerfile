@@ -1,25 +1,42 @@
 FROM public.ecr.aws/lambda/python:3.11
 
-# Install system deps required for building wheels (e.g., sentencepiece needs cmake and gcc)
-RUN yum install -y curl gcc-c++ make cmake tar gzip && yum clean all
+# Install system dependencies required for building Python packages
+RUN yum install -y \
+    curl \
+    gcc-c++ \
+    make \
+    cmake \
+    tar \
+    gzip \
+    && yum clean all \
+    && rm -rf /var/cache/yum
 
 WORKDIR /var/task
 
-# Install PyTorch (CPU version only to save space) first
+# Install CPU-only PyTorch
 RUN pip install --no-cache-dir \
     --extra-index-url https://download.pytorch.org/whl/cpu \
     torch==2.6.0+cpu
 
-# Copy and install requirements (includes mangum)
+# Copy requirements
 COPY requirements.txt .
+
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy the FastAPI application (including the adapter in app/adapter/best)
+# Copy application and bundled adapter
 COPY app/ ./app/
 
-# Set Environment Variables
-ENV PYTHONUNBUFFERED=1 \
+# AWS Lambda filesystem is read-only except /tmp.
+# Force HOME and all Hugging Face / Transformers caches to /tmp.
+ENV HOME=/tmp \
+    HF_HOME=/tmp/huggingface \
+    HF_HUB_CACHE=/tmp/huggingface/hub \
+    TRANSFORMERS_CACHE=/tmp/huggingface/transformers \
+    HUGGINGFACE_HUB_CACHE=/tmp/huggingface/hub \
+    XDG_CACHE_HOME=/tmp/cache \
+    PYTHONUNBUFFERED=1 \
     GLINER_BASE_MODEL=fastino/gliner2-base-v1 \
     NER_LABELS=PERSON,GPE,ORG,EVENT,DATE \
     NER_THRESHOLD=0.3 \
@@ -28,6 +45,5 @@ ENV PYTHONUNBUFFERED=1 \
     RATE_LIMIT_REQUESTS=10 \
     RATE_LIMIT_WINDOW=60
 
-# Use Mangum to wrap the FastAPI app
-# Format: app.main.handler refers to the 'handler' variable inside app/main.py (which is Mangum(app))
+# Mangum handler for AWS Lambda
 CMD ["app.main.handler"]
